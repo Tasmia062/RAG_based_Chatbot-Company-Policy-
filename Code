@@ -1,0 +1,240 @@
+**Creating Data**
+# Create folder named "data"
+!mkdir -p data
+
+# Create sample text files
+
+# HR policy
+with open('data/hr_policy.txt', 'w') as f:
+    f.write('''Company HR Policy:
+
+1. Equal Employment Opportunity:
+The company is committed to providing equal employment opportunities to all employees and applicants without regard to race, gender, religion, or disability.
+
+2. Code of Conduct:
+Employees are expected to maintain professionalism, integrity, and respect toward colleagues, clients, and company property.
+
+3. Performance Reviews:
+Formal performance evaluations are conducted twice a year to assess employee progress and set goals for the upcoming period.
+
+4. Work Hours:
+Standard work hours are from 9:00 AM to 6:00 PM, Monday through Friday.
+''')
+
+# IT policy
+with open('data/it_policy.txt', 'w') as f:
+    f.write('''Company IT Policy:
+
+1. Device Usage:
+Employees must use company-approved devices for all work-related tasks. Personal devices may only be used with written approval from the IT department.
+
+2. Data Security:
+All confidential data must be stored on secure company servers. Sharing credentials or accessing restricted systems without authorization is prohibited.
+
+3. Internet and Email Usage:
+Company internet and email services should be used primarily for business purposes. Misuse for personal activities or offensive content is subject to disciplinary action.
+
+4. Software Installation:
+Only IT-approved software may be installed on company devices. Unauthorized software installations are not permitted.
+''')
+
+# Leave policy
+with open('data/leave_policy.txt', 'w') as f:
+    f.write('''Company Leave Policy:
+
+1. Annual Leave:
+All full-time employees are entitled to 20 working days of paid annual leave per calendar year. Leave must be requested at least 7 days in advance.
+
+2. Sick Leave:
+Employees are entitled to 10 days of paid sick leave per year. A medical certificate must be submitted for absences exceeding two days.
+
+3. Maternity and Paternity Leave:
+Female employees are entitled to 6 months of paid maternity leave. Male employees are entitled to 15 days of paid paternity leave.
+
+4. Emergency Leave:
+Up to 3 days of emergency leave may be granted in special circumstances, subject to managerial approval.
+
+5. Leave Encashment:
+Unused annual leave may be carried forward for up to one year or encashed at the end of the calendar year.
+''')
+
+# Remote Work policy
+with open('data/remote_work_policy.txt', 'w') as f:
+    f.write('''Company Remote Work Policy:
+
+1. Eligibility:
+Employees who have completed at least 6 months of service are eligible to apply for remote work arrangements.
+
+2. Work Hours:
+Remote employees must adhere to standard company work hours and remain available for virtual meetings during this time.
+
+3. Communication:
+All remote employees must be reachable through official communication channels such as company email, Teams, or Slack during working hours.
+
+4. Equipment and Security:
+Employees are responsible for maintaining company-provided equipment in good condition. VPN access must be used to connect to company systems.
+
+5. Performance Monitoring:
+Supervisors will evaluate remote employees based on deliverables, deadlines, and productivity metrics rather than time spent online.
+''')
+
+**Import dependencies and libraries**
+!pip install langchain langchain-community langchain-core faiss-cpu sentence-transformers transformers fastapi uvicorn pyngrok
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.document_loaders import TextLoader, DirectoryLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chains import RetrievalQA
+from langchain_community.llms import HuggingFacePipeline
+from transformers import pipeline
+from langchain.memory import ConversationBufferMemory
+
+# **Load all files in data/**
+loader = DirectoryLoader("data", glob="*.txt", loader_cls=TextLoader)
+documents = loader.load()
+
+# **Split into chunks for better retrieval**
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+docs = text_splitter.split_documents(documents)
+
+
+**Create Embeddings and FAISS Vector Database**
+embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+vectorstore = FAISS.from_documents(docs, embeddings)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+
+**Load model Flan-T5**
+# Load a small instruction-tuned model
+model_name = "google/flan-t5-base"
+pipe = pipeline("text2text-generation", model=model_name, tokenizer=model_name, max_length=256)
+
+llm = HuggingFacePipeline(pipeline=pipe)
+
+**Buil RAG chain and memory setup**
+# Conversation memory setup
+memory = ConversationBufferMemory(
+    memory_key="chat_history",
+    return_messages=True
+)
+
+# Conversational rag chain
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    chain_type="stuff",
+    retriever=retriever,
+    return_source_documents=True,
+    output_key="result"
+)
+
+!pip install -q nest_asyncio
+**Testing**
+query = "How many month can a female employee get paid maternity leave?"
+result = qa_chain.invoke({"query": query})
+
+print("Answer:", result["result"])
+print("\nSources:")
+for doc in result["source_documents"]:
+    print("-", doc.metadata["source"])
+
+query = "What about a male employee get paid maternity leave?"
+result = qa_chain.invoke({"query": query})
+
+print("Answer:", result["result"])
+print("\nSources:")
+for doc in result["source_documents"]:
+    print("-", doc.metadata["source"])
+
+**Integrate Streamlit**
+%%writefile streamlit_rag_app.py
+# --- Streamlit RAG Chatbot with Memory and Citations ---
+
+import streamlit as st
+from langchain.chains import RetrievalQA
+from langchain.memory import ConversationBufferMemory
+from langchain_community.llms import HuggingFacePipeline
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from transformers import pipeline
+
+# --- Streamlit Page Setup ---
+st.set_page_config(page_title="RAG Chatbot", layout="wide")
+st.title("RAG Chatbot with Memory and Citations")
+st.caption("Powered by FLAN-T5 + FAISS + LangChain + Streamlit")
+
+# --- Load Local LLM ---
+model_name = "google/flan-t5-base"
+pipe = pipeline("text2text-generation", model=model_name, tokenizer=model_name, max_length=256)
+llm = HuggingFacePipeline(pipeline=pipe)
+
+# --- Load Embeddings & Vectorstore ---
+embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+vectorstore = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+
+# --- Memory Setup (Important fix: input_key + output_key) ---
+memory = ConversationBufferMemory(
+    memory_key="chat_history",
+    input_key="query",
+    output_key="result",
+    return_messages=True
+)
+
+# --- RAG Chain Setup ---
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    chain_type="stuff",
+    retriever=retriever,
+    memory=memory,
+    return_source_documents=True,
+    output_key="result"
+)
+
+# --- Initialize Chat History ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# --- User Input ---
+query = st.chat_input("Ask your question about company policy...")
+
+if query:
+    with st.spinner("Thinking..."):
+        response = qa_chain.invoke({"query": query})
+        answer = response["result"]
+        sources = response.get("source_documents", [])
+
+        st.session_state.messages.append({"role": "user", "content": query})
+        st.session_state.messages.append({"role": "assistant", "content": answer, "sources": sources})
+
+# --- Display Conversation ---
+for msg in st.session_state.messages:
+    if msg["role"] == "user":
+        with st.chat_message("user"):
+            st.write(msg["content"])
+    else:
+        with st.chat_message("assistant"):
+            st.write(msg["content"])
+            if msg.get("sources"):
+                with st.expander("Sources"):
+                    for i, doc in enumerate(msg["sources"], 1):
+                        st.markdown(f"**{i}.** `{doc.metadata.get('source', 'Unknown')}`")
+
+# --- Clear Chat Button ---
+if st.button("Clear Chat"):
+    st.session_state.messages = []
+    memory.clear()
+    st.rerun()
+
+import faiss
+import numpy as np
+
+# Save the FAISS vectorstore locally so streamlit_rag_app.py can load it
+vectorstore.save_local("faiss_index")
+!pip install -q pyngrok
+
+from pyngrok import ngrok
+ngrok.set_auth_token("35OT5VZAfFDDdTKlR4rcTedzslw_3z4a72BsZte2hSjZGYsoZ")
+public_url = ngrok.connect(8501)
+print("Public URL:", public_url)
+**Public URL: NgrokTunnel: "https://polyzoic-inalienably-rodolfo.ngrok-free.dev" -> "http://localhost:8501"**
+
+!streamlit run streamlit_rag_app.py --server.port 8501
